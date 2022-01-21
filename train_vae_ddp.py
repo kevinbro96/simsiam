@@ -134,9 +134,8 @@ def main():
     use_cuda = torch.cuda.is_available()
     print('\n[Phase 1] : Data Preparation')
 
-    if args.dataset == 'imagenet100':
-        normalizer = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-        model = CVAE_imagenet_withbn(128, args.dim)
+    normalizer = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    model = CVAE_imagenet_withbn(128, args.dim)
 
     transform_train = transforms.Compose(
         [
@@ -152,12 +151,11 @@ def main():
         ]
     )
 
-    if args.dataset == 'imagenet':
-        print("| Preparing imagenet dataset...")
-        sys.stdout.write("| ")
-        root='/public/data0/datasets/imagenet-2012'
-        train_path = os.path.join(root, 'train')
-        trainset = datasets.ImageFolder(root=train_path, transform=transform_train)
+    print("| Preparing imagenet dataset...")
+    sys.stdout.write("| ")
+    root='/public/data0/datasets/imagenet-2012/'
+    train_path = os.path.join(root, 'train')
+    trainset = datasets.ImageFolder(root=train_path, transform=transform_train)
 
     train_sampler = DistributedSampler(trainset)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, num_workers=4,
