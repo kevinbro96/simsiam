@@ -19,7 +19,7 @@ import pdb
 import sys
 import torch.autograd as autograd
 import torchvision.models as models
-
+import torchvision.datasets as datasets
 import simsiam.loader
 sys.path.append('.')
 
@@ -48,6 +48,8 @@ def parse():
                         help="apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
                              "See details at https://nvidia.github.io/apex/amp.html")
     parser.add_argument("--local_rank", default=0, type=int)
+    parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
+                        help='url used to set up distributed training')
     args = parser.parse_args()
     return args
 
@@ -125,7 +127,7 @@ def main():
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False  # True
-    torch.distributed.init_process_group(backend='nccl', init_method='env://')
+    torch.distributed.init_process_group(backend='nccl', init_method=args.dist_url,)
 
     torch.cuda.set_device(args.gpu)
     if args.local_rank == 0:
@@ -153,7 +155,7 @@ def main():
 
     print("| Preparing imagenet dataset...")
     sys.stdout.write("| ")
-    root='/public/data0/datasets/imagenet-2012/'
+    root='/CV/datasets/imagenet-2012/'
     train_path = os.path.join(root, 'train')
     trainset = datasets.ImageFolder(root=train_path, transform=transform_train)
 
