@@ -155,7 +155,7 @@ def main():
     if args.dataset == 'imagenet':
         print("| Preparing imagenet dataset...")
         sys.stdout.write("| ")
-        root='/public/data1/datasets/imagenet2012'
+        root='/public/data0/datasets/imagenet-2012'
         train_path = os.path.join(root, 'train')
         trainset = datasets.ImageFolder(root=train_path, transform=transform_train)
 
