@@ -99,9 +99,14 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(args.arch))
-    model = simsiam.builder.SimSiam(
-        models.__dict__[args.arch],
-        args.dim, args.pred_dim, bn_adv_flag=True, bn_adv_momentum=args.bn_adv_momentum)
+    if args.adv:
+        model = simsiam.builder.SimSiam(
+            models.__dict__[args.arch],
+            args.dim, args.pred_dim, bn_adv_flag=True, bn_adv_momentum=args.bn_adv_momentum)
+    else:
+        model = simsiam.builder.SimSiam(
+            models.__dict__[args.arch],
+            args.dim, args.pred_dim)
     vae = CVAE_imagenet_withbn(128, 3072)
     vae.load_state_dict(torch.load(args.vae_path))
     vae.eval()
@@ -193,17 +198,21 @@ def main():
             x2 = x2.cuda(args.gpu, non_blocking=True)
 
             # positive pair, with encoding
-            x1_adv, gx = gen_adv(model, vae, x1, criterion, args)
+            if args.adv:
+                x1_adv, gx = gen_adv(model, vae, x1, criterion, args)
 
             optimizer.zero_grad()
             p1, z1 = model(x1)
             p2, z2 = model(x2)
 
             loss_og = -(criterion(p1, z2.detach()).mean() + criterion(p2, z1.detach()).mean()) * 0.5
-
-            p1_adv, z1_adv = model(x1_adv, adv=True)
-            loss_adv = -(criterion(p1_adv, z2.detach()).mean() + criterion(p2, z1_adv.detach()).mean()) * 0.5
-            loss = loss_og + loss_adv
+            if args.adv:
+                p1_adv, z1_adv = model(x1_adv, adv=True)
+                loss_adv = -(criterion(p1_adv, z2.detach()).mean() + criterion(p2, z1_adv.detach()).mean()) * 0.5
+                loss = loss_og + loss_adv
+            else:
+                loss = loss_og
+                loss_adv = loss_og
 
             optimizer.zero_grad()
             loss.backward()
@@ -221,8 +230,8 @@ def main():
                     wandb.log({'loss_og': losses_og.avg,
                                'loss_adv': losses_adv.avg,
                                'lr': optimizer.param_groups[0]['lr']})
-
-        reconst_images(x1, gx, x1_adv)
+        if args.local_rank == 0 and args.adv:
+            reconst_images(x1, gx, x1_adv)
         if args.local_rank == 0:
             save_checkpoint({
                 'epoch': epoch + 1,
@@ -283,7 +292,6 @@ class AverageMeter(object):
     def __str__(self):
         fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
         return fmtstr.format(**self.__dict__)
-
 
 
 def adjust_learning_rate(optimizer, init_lr, epoch, args):

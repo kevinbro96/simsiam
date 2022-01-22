@@ -57,4 +57,4 @@ class SimSiam(nn.Module):
 
         p1 = self.predictor(z1) # NxC
 
-        return p1,  z1.detach()
+        return p1, z1.detach()
