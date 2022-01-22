@@ -91,6 +91,7 @@ parser.add_argument('--pred-dim', default=512, type=int,
 parser.add_argument('--fix-pred-lr', action='store_true',
                     help='Fix learning rate for the predictor')
 
+parser.add_argument('--bn_adv_momentum', default=0.01, type=float, help='batch norm momentum for advprop')
 parser.add_argument('--vae_path', default='../results/vae_dim512_kl0.1_simclr/model_epoch92.pth',
                     type=str, help='vae_path')
 parser.add_argument('--eps', default=0.01, type=float, help='eps for adversarial')
@@ -158,7 +159,7 @@ def main_worker(gpu, ngpus_per_node, args):
     model = simsiam.builder.SimSiam(
         models.__dict__[args.arch],
         args.dim, args.pred_dim, bn_adv_flag=True, bn_adv_momentum=args.bn_adv_momentum,)
-    vae = CVAE_imagenet_withbn(128, args.dim)
+    vae = CVAE_imagenet_withbn(128, 3072)
     vae.load_state_dict(torch.load(args.vae_path))
     vae.eval()
     # infer learning rate before changing batch size
@@ -304,19 +305,15 @@ def train(train_loader, model, vae, criterion, optimizer, epoch, args):
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
+        x_1_adv, gx = gen_adv(model, vae, images[0], criterion, args)
+        optimizer.zero_grad()
         # compute output and loss
         p1, z1 = model(images[0])
         p2, z2 = model(images[1])
         loss_orig = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
-
-        if args.adv:
-            x_1_adv, gx = gen_adv(model, vae, images[0], criterion, args)
-            p1_adv, z1_adv = model(x_1_adv, adv=True)
-            loss_adv = -(criterion(p1_adv, z2).mean() + criterion(p2, z1_adv).mean()) * 0.5
-            loss = loss_orig + loss_adv
-        else:
-            loss = loss_orig
-            loss_adv = loss_orig
+        p1_adv, z1_adv = model(x_1_adv, adv=True)
+        loss_adv = -(criterion(p1_adv, z2).mean() + criterion(p2, z1_adv).mean()) * 0.5
+        loss = loss_orig + loss_adv
 
         losses_orig.update(loss_orig.item(), images[0].size(0))
         losses_adv.update(loss_adv.item(), images[0].size(0))
@@ -351,7 +348,7 @@ def gen_adv(model, vae, x1, criterion, args):
         sign_grad = variable_bottle.grad.data.sign()
         variable_bottle.data = variable_bottle.data + args.eps * sign_grad
         adv_gx = vae(variable_bottle, True)
-        x_1_adv = adv_gx + (x_1 - gx).detach()
+        x_1_adv = adv_gx + (x1 - gx).detach()
     x_1_adv.requires_grad = False
     x_1_adv.detach()
     return x_1_adv, gx

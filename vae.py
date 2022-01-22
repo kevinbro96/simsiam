@@ -11,7 +11,7 @@ from torch import nn
 from torch.nn import init
 from torch.nn import functional as F
 from torch.autograd import Variable
-import torchvision.models as models
+
 import torch.nn.functional as F
 from torch.autograd import Function, Variable
 import functools
