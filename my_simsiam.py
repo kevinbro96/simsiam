@@ -1,3 +1,10 @@
+import builtins
+import math
+import os
+import random
+import shutil
+import time
+import warnings
 import os
 import torch
 import torchvision
@@ -18,7 +25,9 @@ import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from apex.parallel import DistributedDataParallel as DDP
 from apex.parallel import convert_syncbn_model
-
+model_names = sorted(name for name in models.__dict__
+    if name.islower() and not name.startswith("__")
+    and callable(models.__dict__[name]))
 
 def parse():
     parser = argparse.ArgumentParser(description=' Seen Testing Category Training')
@@ -104,13 +113,12 @@ def main():
     vae.cuda(args.gpu)
     args.batch_size = int(args.batch_size / args.world_size)
     args.workers = int((args.workers + args.world_size - 1) / args.world_size)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-    vae = torch.nn.parallel.DistributedDataParallel(vae, device_ids=[args.gpu])
+    model = DDP(model, delay_allreduce=True)
+    vae =  DDP(vae, delay_allreduce=True)
 
     if args.local_rank == 0:
-        wandb.init(config=args, name=suffix.replace("_log/", ''))
-
-    print(model) # print model after SyncBatchNorm
+        wandb.init(config=args)
+        print(model) # print model after SyncBatchNorm
     criterion = nn.CosineSimilarity(dim=1).cuda(args.gpu)
 
     if args.fix_pred_lr:
@@ -195,7 +203,7 @@ def main():
 
             p1_adv, z1_adv = model(x1_adv, adv=True)
             loss_adv = -(criterion(p1_adv, z2.detach()).mean() + criterion(p2, z1_adv.detach()).mean()) * 0.5
-            loss = loss_og + args.alpha * loss_adv
+            loss = loss_og + loss_adv
 
             optimizer.zero_grad()
             loss.backward()
@@ -206,9 +214,9 @@ def main():
             batch_time.update(time.time() - end)
             end = time.time()
             if args.local_rank == 0:
-                if step % 50 == 0:
+                if step % 10 == 0:
                     print(
-                        f"[Epoch]: {epoch} [{step}/{len(train_loader)}]\t Loss_og: {losses_og.avg:.3f} Loss_adv: {losses_adv.avg:.3f}")
+                            f"[Epoch]: {epoch} [{step}/{len(train_loader)}]\t Batch_time: {batch_time.avg:.2f} Loss_og: {losses_og.avg:.3f} Loss_adv: {losses_adv.avg:.3f}")
                 if step % 10 == 0:
                     wandb.log({'loss_og': losses_og.avg,
                                'loss_adv': losses_adv.avg,
