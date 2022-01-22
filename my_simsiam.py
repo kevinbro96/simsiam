@@ -76,6 +76,7 @@ def parse():
     parser.add_argument('--eps', default=0.01, type=float, help='eps for adversarial')
     parser.add_argument('--adv', default=False, action='store_true', help='idaa')
     parser.add_argument("--local_rank", default=0, type=int)
+    parser.add_argument("--dir", default=None, type=str)
     args = parser.parse_args()
     return args
 
@@ -238,7 +239,7 @@ def main():
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
-            }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
+            }, is_best=False, filename=args.dir+'checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
 def gen_adv(model, vae, x1, criterion, args):

@@ -150,7 +150,7 @@ def main_worker(gpu, ngpus_per_node, args):
         torch.distributed.barrier()
     # create model
     print("=> creating model '{}'".format(args.arch))
-    model = models.__dict__[args.arch]()
+    model = models.__dict__[args.arch](num_classes=1000)
 
     # freeze all layers but the last fc
     for name, param in model.named_parameters():
