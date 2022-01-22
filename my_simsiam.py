@@ -119,7 +119,7 @@ def main():
     args.batch_size = int(args.batch_size / args.world_size)
     args.workers = int((args.workers + args.world_size - 1) / args.world_size)
     model = DDP(model, delay_allreduce=True)
-    vae =  DDP(vae, delay_allreduce=True)
+    vae = DDP(vae, delay_allreduce=True)
 
     if args.local_rank == 0:
         wandb.init(config=args)
@@ -204,8 +204,8 @@ def main():
             optimizer.zero_grad()
             p1, z1 = model(x1)
             p2, z2 = model(x2)
-
             loss_og = -(criterion(p1, z2.detach()).mean() + criterion(p2, z1.detach()).mean()) * 0.5
+
             if args.adv:
                 p1_adv, z1_adv = model(x1_adv, adv=True)
                 loss_adv = -(criterion(p1_adv, z2.detach()).mean() + criterion(p2, z1_adv.detach()).mean()) * 0.5
