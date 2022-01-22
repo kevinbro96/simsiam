@@ -12,16 +12,17 @@ class SimSiam(nn.Module):
     """
     Build a SimSiam model.
     """
-    def __init__(self, base_encoder, dim=2048, pred_dim=512):
+    def __init__(self, base_encoder, dim=2048, pred_dim=512, bn_adv_flag=False, bn_adv_momentum=0.01):
         """
         dim: feature dimension (default: 2048)
         pred_dim: hidden dimension of the predictor (default: 512)
         """
         super(SimSiam, self).__init__()
-
+        self.bn_adv_flag = bn_adv_flag
+        self.bn_adv_momentum = bn_adv_momentum
         # create the encoder
         # num_classes is the output fc dimension, zero-initialize last BNs
-        self.encoder = base_encoder(num_classes=dim, zero_init_residual=True)
+        self.encoder = base_encoder(num_classes=dim, bn_adv_flag=self.bn_adv_flag, bn_adv_momentum=self.bn_adv_momentum)
 
         # build a 3-layer projector
         prev_dim = self.encoder.fc.weight.shape[1]
@@ -41,7 +42,7 @@ class SimSiam(nn.Module):
                                         nn.ReLU(inplace=True), # hidden layer
                                         nn.Linear(pred_dim, dim)) # output layer
 
-    def forward(self, x1, x2):
+    def forward(self, x1, adv=False):
         """
         Input:
             x1: first views of images
@@ -52,10 +53,8 @@ class SimSiam(nn.Module):
         """
 
         # compute features for one view
-        z1 = self.encoder(x1) # NxC
-        z2 = self.encoder(x2) # NxC
+        z1 = self.encoder(x1, adv=adv) # NxC
 
         p1 = self.predictor(z1) # NxC
-        p2 = self.predictor(z2) # NxC
 
-        return p1, p2, z1.detach(), z2.detach()
+        return p1,  z1.detach()

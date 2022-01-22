@@ -25,10 +25,11 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import models
+import models_adv as models
 
 import simsiam.loader
 import simsiam.builder
+from vae import *
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -37,11 +38,11 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',
+parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50_imagenet',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
-                        ' (default: resnet50)')
+                        ' (default: resnet50_imagenet)')
 parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
                     help='number of data loading workers (default: 32)')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
@@ -89,6 +90,11 @@ parser.add_argument('--pred-dim', default=512, type=int,
                     help='hidden dimension of the predictor (default: 512)')
 parser.add_argument('--fix-pred-lr', action='store_true',
                     help='Fix learning rate for the predictor')
+
+parser.add_argument('--vae_path', default='../results/vae_dim512_kl0.1_simclr/model_epoch92.pth',
+                    type=str, help='vae_path')
+parser.add_argument('--eps', default=0.01, type=float, help='eps for adversarial')
+parser.add_argument('--adv', default=False, action='store_true', help='idaa')
 
 def main():
     args = parser.parse_args()
@@ -151,8 +157,10 @@ def main_worker(gpu, ngpus_per_node, args):
     print("=> creating model '{}'".format(args.arch))
     model = simsiam.builder.SimSiam(
         models.__dict__[args.arch],
-        args.dim, args.pred_dim)
-
+        args.dim, args.pred_dim, bn_adv_flag=True, bn_adv_momentum=args.bn_adv_momentum,)
+    vae = CVAE_imagenet_withbn(128, args.dim)
+    vae.load_state_dict(torch.load(args.vae_path))
+    vae.eval()
     # infer learning rate before changing batch size
     init_lr = args.lr * args.batch_size / 256
 
@@ -165,20 +173,25 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.gpu is not None:
             torch.cuda.set_device(args.gpu)
             model.cuda(args.gpu)
+            vae.cuda(args.gpu)
             # When using a single GPU per process and per
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
             args.batch_size = int(args.batch_size / ngpus_per_node)
             args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            vae = torch.nn.parallel.DistributedDataParallel(vae, device_ids=[args.gpu])
         else:
             model.cuda()
+            vae.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
             # available GPUs if device_ids are not set
             model = torch.nn.parallel.DistributedDataParallel(model)
+            vae = torch.nn.parallel.DistributedDataParallel(vae)
     elif args.gpu is not None:
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
+        vae = vae.cuda(args.gpu)
         # comment out the following line for debugging
         raise NotImplementedError("Only DistributedDataParallel is supported.")
     else:
@@ -257,7 +270,7 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, init_lr, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, vae, criterion, optimizer, epoch, args)
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -269,13 +282,14 @@ def main_worker(gpu, ngpus_per_node, args):
             }, is_best=False, filename='checkpoint_{:04d}.pth.tar'.format(epoch))
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, vae, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
-    losses = AverageMeter('Loss', ':.4f')
+    losses_orig = AverageMeter('Loss', ':.4f')
+    losses_adv = AverageMeter('Loss', ':.4f')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses],
+        [batch_time, data_time, losses_orig, losses_adv],
         prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
@@ -291,10 +305,21 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         # compute output and loss
-        p1, p2, z1, z2 = model(x1=images[0], x2=images[1])
-        loss = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
+        p1, z1 = model(images[0])
+        p2, z2 = model(images[1])
+        loss_orig = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
 
-        losses.update(loss.item(), images[0].size(0))
+        if args.adv:
+            x_1_adv, gx = gen_adv(model, vae, images[0], criterion, args)
+            p1_adv, z1_adv = model(x_1_adv, adv=True)
+            loss_adv = -(criterion(p1_adv, z2).mean() + criterion(p2, z1_adv).mean()) * 0.5
+            loss = loss_orig + loss_adv
+        else:
+            loss = loss_orig
+            loss_adv = loss_orig
+
+        losses_orig.update(loss_orig.item(), images[0].size(0))
+        losses_adv.update(loss_adv.item(), images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -307,6 +332,29 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         if i % args.print_freq == 0:
             progress.display(i)
+
+
+def gen_adv(model, vae, x1, criterion, args):
+    x1 = x1.detach()
+    p1, z1 = model(x1, adv=True)
+
+    with torch.no_grad():
+        z, gx, _, _ = vae(x1)
+    variable_bottle = Variable(z.detach(), requires_grad=True)
+    adv_gx = vae(variable_bottle, True)
+    x1_adv = adv_gx + (x1 - gx).detach()
+    p1_adv, z1_adv = model(x1_adv, adv=True)
+    tmp_loss = - criterion(p1_adv, z1).mean()
+    tmp_loss.backward()
+
+    with torch.no_grad():
+        sign_grad = variable_bottle.grad.data.sign()
+        variable_bottle.data = variable_bottle.data + args.eps * sign_grad
+        adv_gx = vae(variable_bottle, True)
+        x_1_adv = adv_gx + (x_1 - gx).detach()
+    x_1_adv.requires_grad = False
+    x_1_adv.detach()
+    return x_1_adv, gx
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
