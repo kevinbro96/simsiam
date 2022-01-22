@@ -168,7 +168,10 @@ class CVAE_imagenet_withbn(AbstractAutoEncoder):
     def encode(self, x):
         h = self.encoder(x)
         h1 = h.view(-1, self.d * self.f ** 2)
-        return h, self.fc11(h1), self.fc12(h1)
+        mu = self.fc11(h1)
+        logvar = self.fc12(h1)
+        z = self.reparameterize(mu, logvar)
+        return z, mu, logvar
 
     def reparameterize(self, mu, logvar):
         if self.training:
@@ -179,23 +182,16 @@ class CVAE_imagenet_withbn(AbstractAutoEncoder):
             return mu
 
     def decode(self, z):
+        z = self.fc21(z)
         z = z.view(-1, self.d, self.f, self.f)
         h3 = self.decoder(z)
-        return torch.tanh(h3)
+        return self.bn(torch.tanh(h3))
 
-    def forward(self, x, decode=False):
-        if decode:
-            z_projected = self.fc21(x)
-            gx = self.decode(z_projected)
-            gx = self.bn(gx)
-            return gx
-        else:
-            _, mu, logvar = self.encode(x)
-            z = self.reparameterize(mu, logvar)
-            z_projected = self.fc21(z)
-            gx = self.decode(z_projected)
-            gx = self.bn(gx)
-        return z, gx, mu, logvar
+    def forward(self, x):
+        z, mu, logvar = self.encode(x)
+        gx = self.decode(z)
+            
+        return z, gx
 
 
 class CVAE_imagenet_withbn_v2(AbstractAutoEncoder):
@@ -235,7 +231,10 @@ class CVAE_imagenet_withbn_v2(AbstractAutoEncoder):
     def encode(self, x):
         h = self.encoder(x)
         h1 = h.view(-1, self.d * self.f ** 2)
-        return h, self.fc11(h1), self.fc12(h1)
+        mu = self.fc11(h1)
+        logvar = self.fc12(h1)
+        z = self.reparameterizae(mu, logvar)
+        return z, mu, logvar
 
     def reparameterize(self, mu, logvar):
         if self.training:
@@ -246,20 +245,12 @@ class CVAE_imagenet_withbn_v2(AbstractAutoEncoder):
             return mu
 
     def decode(self, z):
+        z = self.fc21(z)
         z = z.view(-1, self.d, self.f, self.f)
         h3 = self.decoder(z)
-        return torch.tanh(h3)
+        return self.bn(torch.tanh(h3))
 
-    def forward(self, x, decode=False):
-        if decode:
-            z_projected = self.fc21(x)
-            gx = self.decode(z_projected)
-            gx = self.bn(gx)
-            return gx
-        else:
-            _, mu, logvar = self.encode(x)
-            z = self.reparameterize(mu, logvar)
-            z_projected = self.fc21(z)
-            gx = self.decode(z_projected)
-            gx = self.bn(gx)
+    def forward(self, x):
+        z, mu, logvar = self.encode(x)
+        gx = self.decode(z)
         return z, gx, mu, logvar

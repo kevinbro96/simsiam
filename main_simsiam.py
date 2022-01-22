@@ -30,7 +30,7 @@ import models_adv as models
 import simsiam.loader
 import simsiam.builder
 from vae import *
-
+import pdb
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
@@ -293,8 +293,7 @@ def train(train_loader, model, vae, criterion, optimizer, epoch, args):
         [batch_time, data_time, losses_orig, losses_adv],
         prefix="Epoch: [{}]".format(epoch))
 
-    # switch to train mode
-    model.train()
+    
 
     end = time.time()
     for i, (images, _) in enumerate(train_loader):
@@ -304,15 +303,20 @@ def train(train_loader, model, vae, criterion, optimizer, epoch, args):
         if args.gpu is not None:
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
-
-        x_1_adv, gx = gen_adv(model, vae, images[0], criterion, args)
+        model.eval()
+        x_1_adv = gen_adv(model, vae, images[0], criterion, args)
         optimizer.zero_grad()
+        model.train()
         # compute output and loss
-        p1, z1 = model(images[0])
-        p2, z2 = model(images[1])
-        loss_orig = -(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5
-        p1_adv, z1_adv = model(x_1_adv, adv=True)
-        loss_adv = -(criterion(p1_adv, z2).mean() + criterion(p2, z1_adv).mean()) * 0.5
+        z1 = model.module.encoder(images[0])
+        p1 = model.module.predictor(z1)
+        z2 = model.module.encoder(images[1])
+        p2 = model.module.predictor(z2)
+
+        loss_orig = -(criterion(p1, z2.detach()).mean() + criterion(p2, z1.detach()).mean()) * 0.5
+        z1_adv = model.module.encoder(x_1_adv.detach(), adv=True)
+        p1_adv = model.module.predictor(z1_adv)
+        loss_adv = -(criterion(p1_adv, z2.detach()).mean() + criterion(p2, z1_adv.detach()).mean()) * 0.5
         loss = loss_orig + loss_adv
 
         losses_orig.update(loss_orig.item(), images[0].size(0))
@@ -333,25 +337,25 @@ def train(train_loader, model, vae, criterion, optimizer, epoch, args):
 
 def gen_adv(model, vae, x1, criterion, args):
     x1 = x1.detach()
-    p1, z1 = model(x1, adv=True)
+    z1 = model.module.encoder(x1, adv=True)
 
     with torch.no_grad():
-        z, gx, _, _ = vae(x1)
+        z, gx = vae(x1)
     variable_bottle = Variable(z.detach(), requires_grad=True)
-    adv_gx = vae(variable_bottle, True)
+    adv_gx = vae.module.decode(variable_bottle)
     x1_adv = adv_gx + (x1 - gx).detach()
-    p1_adv, z1_adv = model(x1_adv, adv=True)
-    tmp_loss = - criterion(p1_adv, z1).mean()
+    p1_adv = model.module.predictor(model.module.encoder(x1_adv, adv=True))
+    tmp_loss = - criterion(p1_adv, z1.detach()).mean()
     tmp_loss.backward()
 
     with torch.no_grad():
         sign_grad = variable_bottle.grad.data.sign()
         variable_bottle.data = variable_bottle.data + args.eps * sign_grad
-        adv_gx = vae(variable_bottle, True)
+        adv_gx = vae.module.decode(variable_bottle)
         x_1_adv = adv_gx + (x1 - gx).detach()
     x_1_adv.requires_grad = False
     x_1_adv.detach()
-    return x_1_adv, gx
+    return x_1_adv
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
